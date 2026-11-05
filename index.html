@@ -60,6 +60,9 @@ details summary{cursor:pointer;font-weight:bold;font-size:15px}
       <label>목소리 (여성 14가지)</label>
       <select id="voice"></select>
 
+      <label><input type="checkbox" id="speakerMode" style="width:auto;margin-right:6px">스피커 모드 (캐릭터가 말하는 동안 내 마이크를 잠깐 꺼요)</label>
+      <div class="hint">스피커로 들을 때 켜 두세요. 대신 캐릭터가 말하는 중에 끼어들 수는 없고, 말이 끝난 뒤에 말하면 돼요. 이어폰을 쓰면 꺼도 돼요.</div>
+
       <label>캐릭터 이름</label>
       <input id="charName" placeholder="예: 미나">
 
@@ -79,7 +82,7 @@ details summary{cursor:pointer;font-weight:bold;font-size:15px}
   </div>
 
   <div class="card hint" style="color:#8ba0b8">
-    💡 스피커로 들으면 내 목소리와 캐릭터 목소리가 섞여서 대화가 끊길 수 있어요. 이어폰을 끼면 훨씬 잘 돼요.
+    💡 스피커로 들을 때는 설정의 "스피커 모드"를 켜 두세요. 캐릭터 말이 끝난 뒤에 말하면 돼요. 이어폰을 끼면 끼어들기도 돼요.
   </div>
 </div>
 
@@ -108,6 +111,7 @@ function loadSettings() {
   $('charName').value = s.charName || '미나';
   $('persona').value = s.persona || DEFAULT_PERSONA;
   $('model').value = s.model || DEFAULT_MODEL;
+  $('speakerMode').checked = s.speakerMode !== false;
   if (s.apiKey) { $('settings').open = false; setStatus('전화 버튼을 눌러 말을 걸어 보세요.'); }
 }
 function saveSettings(notify) {
@@ -116,7 +120,8 @@ function saveSettings(notify) {
     voice: $('voice').value,
     charName: $('charName').value.trim(),
     persona: $('persona').value.trim(),
-    model: $('model').value.trim() || DEFAULT_MODEL
+    model: $('model').value.trim() || DEFAULT_MODEL,
+    speakerMode: $('speakerMode').checked
   };
   localStorage.setItem('voiceChatSettings_v1', JSON.stringify(s));
   if (notify) addMsg('sys', '설정을 저장했어요. 새로 전화를 걸면 적용돼요.');
@@ -134,7 +139,7 @@ function addMsg(kind, text) {
 
 // ---------- 통화 상태 ----------
 let ws = null, ctx = null, micStream = null, micNode = null, workletNode = null;
-let active = false, ready = false, wakeLock = null;
+let active = false, ready = false, wakeLock = null, speakerMode = true;
 let nextPlayTime = 0, playing = [];
 let inBuf = [], inBufLen = 0;
 let curMe = null, curAi = null;
@@ -143,6 +148,7 @@ async function toggleCall() { active ? hangUp('통화를 끝냈어요.') : start
 
 async function startCall() {
   const s = saveSettings(false);
+  speakerMode = s.speakerMode;
   if (!s.apiKey) { $('settings').open = true; setStatus('먼저 설정에 구글 AI 열쇠를 넣어 주세요.'); return; }
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     setStatus('이 주소에서는 마이크를 쓸 수 없어요. 인터넷 주소(https)로 열어야 해요.'); return;
@@ -253,6 +259,10 @@ async function startMic() {
 
 function onMicData(f32) {
   if (!active || !ready || !ws || ws.readyState !== 1) return;
+  if (speakerMode && (playing.length > 0 || ctx.currentTime < nextPlayTime + 0.5)) {
+    inBuf = []; inBufLen = 0; $('meterBar').style.width = '0';
+    return;
+  }
   let peak = 0;
   for (let i = 0; i < f32.length; i += 8) peak = Math.max(peak, Math.abs(f32[i]));
   $('meterBar').style.width = Math.min(100, peak * 260) + '%';
