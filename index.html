@@ -44,6 +44,8 @@ details summary{cursor:pointer;font-weight:bold;font-size:15px}
     <button id="callBtn" onclick="toggleCall()">📞</button>
     <div id="status">준비됐어요. 아래 설정에서 열쇠를 먼저 넣어 주세요.</div>
     <div class="meter"><div id="meterBar"></div></div>
+    <button class="btn2" style="margin-top:10px" onclick="testSound()">🔊 소리 시험 (삐- 소리가 나는지 확인)</button>
+    <div id="dbg" class="hint" style="margin-top:8px"></div>
   </div>
 
   <div class="card">
@@ -153,7 +155,7 @@ async function startCall() {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     setStatus('이 주소에서는 마이크를 쓸 수 없어요. 인터넷 주소(https)로 열어야 해요.'); return;
   }
-  active = true; ready = false;
+  active = true; ready = false; chunkCount = 0;
   $('callBtn').classList.add('on'); $('callBtn').textContent = '📴';
   setStatus('연결하는 중이에요…');
 
@@ -161,7 +163,8 @@ async function startCall() {
     ctx = new (window.AudioContext || window.webkitAudioContext)();
     await ctx.resume();
     micStream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 }
+      // 스피커 모드에서는 말하는 동안 마이크를 직접 끄니까, 소리가 통화 볼륨으로 바뀌지 않게 에코 제거를 꺼 둬요
+      audio: { echoCancellation: !speakerMode, noiseSuppression: true, autoGainControl: true, channelCount: 1 }
     });
     // 마이크 허용 창이 뜨면 폰이 소리 재생을 멈출 수 있어서 다시 깨워요
     await ctx.resume();
@@ -294,7 +297,20 @@ function toB64(u8) {
 }
 
 // ---------- 서버 목소리 → 스피커 ----------
-let outGain = null, outEl = null;
+let outGain = null, outEl = null, chunkCount = 0, outKind = '기본';
+function showDbg() {
+  $('dbg').textContent = '받은 소리 조각: ' + chunkCount + '개 · 소리 장치: ' + (ctx ? ctx.state : '꺼짐') + ' · 출력 방식: ' + outKind;
+}
+async function testSound() {
+  const c = ctx || new (window.AudioContext || window.webkitAudioContext)();
+  try { await c.resume(); } catch (e) {}
+  const o = c.createOscillator(), g = c.createGain();
+  g.gain.value = 0.4; o.frequency.value = 523; o.connect(g);
+  g.connect(ctx === c && outGain ? outGain : c.destination);
+  o.start(); o.stop(c.currentTime + 0.8);
+  addMsg('sys', '삐- 소리를 냈어요. 들렸는지 확인해 주세요. (소리 장치: ' + c.state + ')');
+  if (c !== ctx) setTimeout(() => { try { c.close(); } catch (e) {} }, 1200);
+}
 function setupOutput() {
   // 소리를 재생 태그(audio)로 내보내면 폰의 미디어 볼륨으로 크게 나와요. 안 되면 기본 방식으로 돌아가요.
   outGain = ctx.createGain();
@@ -306,16 +322,18 @@ function setupOutput() {
     outEl.srcObject = dest.stream;
     outEl.setAttribute('playsinline', '');
     const p = outEl.play();
-    if (p && p.catch) p.catch(() => { try { outGain.disconnect(); } catch (e) {} outGain.connect(ctx.destination); outEl = null; });
+    outKind = '재생 태그';
+    if (p && p.catch) p.catch(() => { try { outGain.disconnect(); } catch (e) {} outGain.connect(ctx.destination); outEl = null; outKind = '기본(재생 태그 실패)'; showDbg(); });
   } catch (e) {
     try { outGain.disconnect(); } catch (e2) {}
-    outGain.connect(ctx.destination); outEl = null;
+    outGain.connect(ctx.destination); outEl = null; outKind = '기본';
   }
 }
 function playChunk(b64) {
   if (!ctx) return;
   if (ctx.state !== 'running') ctx.resume();
   if (!outGain) setupOutput();
+  chunkCount++; showDbg();
   const bin = atob(b64);
   const n = bin.length >> 1;
   const f32 = new Float32Array(n);
