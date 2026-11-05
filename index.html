@@ -163,6 +163,9 @@ async function startCall() {
     micStream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 }
     });
+    // 마이크 허용 창이 뜨면 폰이 소리 재생을 멈출 수 있어서 다시 깨워요
+    await ctx.resume();
+    setupOutput();
   } catch (e) {
     hangUp('마이크를 켤 수 없었어요. 브라우저에서 마이크 사용을 허용해 주세요.'); return;
   }
@@ -291,7 +294,28 @@ function toB64(u8) {
 }
 
 // ---------- 서버 목소리 → 스피커 ----------
+let outGain = null, outEl = null;
+function setupOutput() {
+  // 소리를 재생 태그(audio)로 내보내면 폰의 미디어 볼륨으로 크게 나와요. 안 되면 기본 방식으로 돌아가요.
+  outGain = ctx.createGain();
+  outGain.gain.value = 1.6;
+  try {
+    const dest = ctx.createMediaStreamDestination();
+    outGain.connect(dest);
+    outEl = new Audio();
+    outEl.srcObject = dest.stream;
+    outEl.setAttribute('playsinline', '');
+    const p = outEl.play();
+    if (p && p.catch) p.catch(() => { try { outGain.disconnect(); } catch (e) {} outGain.connect(ctx.destination); outEl = null; });
+  } catch (e) {
+    try { outGain.disconnect(); } catch (e2) {}
+    outGain.connect(ctx.destination); outEl = null;
+  }
+}
 function playChunk(b64) {
+  if (!ctx) return;
+  if (ctx.state !== 'running') ctx.resume();
+  if (!outGain) setupOutput();
   const bin = atob(b64);
   const n = bin.length >> 1;
   const f32 = new Float32Array(n);
@@ -303,7 +327,7 @@ function playChunk(b64) {
   const buf = ctx.createBuffer(1, n, 24000);
   buf.copyToChannel(f32, 0);
   const node = ctx.createBufferSource();
-  node.buffer = buf; node.connect(ctx.destination);
+  node.buffer = buf; node.connect(outGain);
   const t = Math.max(ctx.currentTime + 0.03, nextPlayTime);
   node.start(t);
   nextPlayTime = t + buf.duration;
@@ -320,6 +344,8 @@ function hangUp(msg) {
   try { if (ws) { ws.onclose = null; ws.close(); } } catch (e) {}
   ws = null;
   stopPlayback();
+  try { if (outEl) { outEl.pause(); outEl.srcObject = null; } } catch (e) {}
+  outEl = null; outGain = null;
   try { if (workletNode) workletNode.disconnect(); if (micNode) micNode.disconnect(); } catch (e) {}
   workletNode = null; micNode = null;
   if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
